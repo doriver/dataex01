@@ -12,6 +12,8 @@ XLSX_PATH = "data/raw/토지실거래가경기하남/토지(매매)_실거래가
 CSV_PATH = "data/basis/토지특성정보경기csv/AL_D195_41_20260402.csv"
 CSV_ENCODING = "cp949"
 OUTPUT_PATH = "data/processed/토지_실거래가_매핑결과.xlsx"
+SUCCESS_OUTPUT_PATH = "data/processed/토지_실거래가_매핑성공.xlsx"
+AMBIGUOUS_OUTPUT_PATH = "data/processed/토지_실거래가_매핑후보다수.xlsx"
 HEADER_ROW = 13
 AREA_TOLERANCE = 0.02
 MOUNTAIN_PREFIX = "산"
@@ -53,15 +55,16 @@ def parse_bunji(raw_bunji):
     return is_mountain, prefix, len(body)
 
 
-def find_match(record, land_index):
+def find_candidates(record, land_index):
+    """조건을 만족하는 토지특성정보 후보를 모두 찾아 반환한다 (0개, 1개, 여러 개 모두 가능)."""
     sigungu = record.get("시군구")
     candidates = land_index.get(sigungu)
     if not candidates:
-        return None
+        return []
 
     raw_bunji = record.get("번지")
     if not raw_bunji:
-        return None
+        return []
     is_mountain, prefix, total_len = parse_bunji(str(raw_bunji))
 
     jimok = record.get("지목")
@@ -71,7 +74,7 @@ def find_match(record, land_index):
     try:
         contract_area = float(record.get("계약면적"))
     except (TypeError, ValueError):
-        return None
+        return []
 
     matches = []
     for land in candidates:
@@ -100,11 +103,30 @@ def find_match(record, land_index):
 
         matches.append(land)
 
+    return matches
+
+
+def format_bunji(land, is_mountain):
+    return MOUNTAIN_PREFIX + land["지번"] if is_mountain else land["지번"]
+
+
+def find_match(record, land_index):
+    matches = find_candidates(record, land_index)
     if len(matches) == 1:
+        is_mountain, _, _ = parse_bunji(str(record.get("번지")).strip())
         land = matches[0]
-        bunji = MOUNTAIN_PREFIX + land["지번"] if is_mountain else land["지번"]
-        return {"번지": bunji, "pnu": land["고유번호"]}
+        return {"번지": format_bunji(land, is_mountain), "pnu": land["고유번호"]}
     return None
+
+
+CANDIDATE_COLUMNS = [
+    ("후보_지번", "지번"),
+    ("후보_대장구분명", "대장구분명"),
+    ("후보_PNU", "고유번호"),
+    ("후보_지목명", "지목명"),
+    ("후보_용도지역명1", "용도지역명1"),
+    ("후보_토지면적", "토지면적"),
+]
 
 
 def main():
@@ -115,19 +137,29 @@ def main():
     land_index = load_land_index(CSV_PATH, sigungu_values)
     print(f"토지특성정보 인덱싱 완료 (법정동 {len(land_index)}개, {sum(len(v) for v in land_index.values())}행)")
 
-    success_count = 0
+    success_records = []
+    ambiguous_records = []
+
     for record in records:
-        match = find_match(record, land_index)
-        if match:
-            record["번지(전체)"] = match["번지"]
-            record["pnu"] = match["pnu"]
-            success_count += 1
+        matches = find_candidates(record, land_index)
+        if len(matches) == 1:
+            is_mountain, _, _ = parse_bunji(str(record.get("번지")).strip())
+            land = matches[0]
+            record["번지(전체)"] = format_bunji(land, is_mountain)
+            record["pnu"] = land["고유번호"]
+            success_records.append(record)
         else:
             record["번지(전체)"] = None
             record["pnu"] = None
+            if len(matches) >= 2:
+                is_mountain, _, _ = parse_bunji(str(record.get("번지")).strip())
+                ambiguous_records.append((record, matches, is_mountain))
 
     total_count = len(records)
+    success_count = len(success_records)
+    ambiguous_count = len(ambiguous_records)
     print(f"매핑 성공: {success_count} / {total_count}")
+    print(f"후보 2개 이상(모호): {ambiguous_count} / {total_count}")
 
     out_header = header + ["번지(전체)", "pnu"]
 
@@ -142,10 +174,35 @@ def main():
     summary_ws.append(["항목", "값"])
     summary_ws.append(["전체 건수", total_count])
     summary_ws.append(["매핑 성공 건수", success_count])
+    summary_ws.append(["후보 2개 이상 건수", ambiguous_count])
 
     Path(OUTPUT_PATH).parent.mkdir(parents=True, exist_ok=True)
     out_wb.save(OUTPUT_PATH)
     print(f"결과 저장: {OUTPUT_PATH}")
+
+    success_wb = openpyxl.Workbook()
+    success_ws = success_wb.active
+    success_ws.title = "매핑성공"
+    success_ws.append(out_header)
+    for record in success_records:
+        success_ws.append([record.get(col) for col in out_header])
+    success_wb.save(SUCCESS_OUTPUT_PATH)
+    print(f"매핑 성공 결과 저장: {SUCCESS_OUTPUT_PATH} ({success_count}건)")
+
+    ambiguous_wb = openpyxl.Workbook()
+    ambiguous_ws = ambiguous_wb.active
+    ambiguous_ws.title = "후보다수"
+    ambiguous_header = header + ["후보번호", "후보개수"] + [col for col, _ in CANDIDATE_COLUMNS] + ["후보_번지(전체)"]
+    ambiguous_ws.append(ambiguous_header)
+    for record, matches, is_mountain in ambiguous_records:
+        base_values = [record.get(col) for col in header]
+        for i, land in enumerate(matches, start=1):
+            candidate_values = [land.get(src) for _, src in CANDIDATE_COLUMNS]
+            ambiguous_ws.append(
+                base_values + [i, len(matches)] + candidate_values + [format_bunji(land, is_mountain)]
+            )
+    ambiguous_wb.save(AMBIGUOUS_OUTPUT_PATH)
+    print(f"후보 다수 결과 저장: {AMBIGUOUS_OUTPUT_PATH} ({ambiguous_count}건, {sum(len(m) for _, m, _ in ambiguous_records)}개 후보행)")
 
 
 if __name__ == "__main__":
