@@ -1,2 +1,4 @@
+data/
 shp
 csv
+__pycache__

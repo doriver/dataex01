@@ -6,7 +6,7 @@ import geopandas as gpd
 if sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
-SHP_PATH = "shp/AL_D152_11_20260520.shp"
+SHP_PATH = "data/basis/토지특성정보경기하남/AL_D194_41450_20260520.shp"
 READ_COUNT = 3
 
 # SHP 파일 읽기

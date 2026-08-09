@@ -4,7 +4,7 @@ import sys
 if sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
-CSV_PATH = "csv/AL_D195_11_20260519.csv"
+CSV_PATH = "data/basis/토지특성정보경기csv/AL_D195_41_20260402.csv"
 ENCODING = "cp949"
 READ_COUNT = 3
 
